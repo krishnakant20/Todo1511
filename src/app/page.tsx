@@ -5,17 +5,19 @@ import {
   CalendarDays,
   Check,
   CheckCheck,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Circle,
   Clock3,
   ListFilter,
   LoaderCircle,
-  Pencil,
   Plus,
   Search,
+  Settings,
   Settings2,
   Sparkles,
+  SquarePen,
   Trash2,
   X,
 } from "lucide-react";
@@ -94,7 +96,9 @@ export default function Home() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const [draft, setDraft] = useState<Draft>(emptyDraft());
+  const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [updatingTaskIds, setUpdatingTaskIds] = useState<Set<string>>(() => new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const loadTasks = useCallback(async () => {
@@ -155,6 +159,7 @@ export default function Home() {
     const now = new Date();
     const defaultDate = selectedDay || dateInputValue(now);
     setEditing(null);
+    setFormError("");
     setDraft({ ...emptyDraft(), date: defaultDate, startTime: "09:00", endTime: "10:00" });
     setModalOpen(true);
   }
@@ -163,6 +168,7 @@ export default function Home() {
     const start = new Date(task.dueAt);
     const end = task.endAt ? new Date(task.endAt) : new Date(start.getTime() + 60 * 60 * 1000);
     setEditing(task);
+    setFormError("");
     setDraft({
       title: task.title,
       description: task.description || "",
@@ -177,7 +183,7 @@ export default function Home() {
   async function saveTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
-    setError("");
+    setFormError("");
     try {
       const startAt = new Date(`${draft.date}T${draft.startTime}`);
       const endAt = new Date(`${draft.date}T${draft.endTime}`);
@@ -192,24 +198,35 @@ export default function Home() {
       setModalOpen(false);
       await loadTasks();
     } catch (reason) {
-      setError(userError(reason, "Could not save this task."));
+      setFormError(userError(reason, "Could not save this task."));
     } finally {
       setSaving(false);
     }
   }
 
   async function updateStatus(task: Task) {
+    if (updatingTaskIds.has(task._id)) return;
+    const nextStatus = task.status === "completed" ? "in_progress" : "completed";
+    setUpdatingTaskIds((current) => new Set(current).add(task._id));
+    setTasks((current) => current.map((item) => item._id === task._id ? { ...item, status: nextStatus } : item));
     try {
       const response = await fetch(`${API_URL}/tasks/${task._id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: task.status === "completed" ? "in_progress" : "completed" }),
+        body: JSON.stringify({ status: nextStatus }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Could not update task status.");
       setTasks((current) => current.map((item) => item._id === task._id ? data.task : item));
     } catch (reason) {
+      setTasks((current) => current.map((item) => item._id === task._id ? { ...item, status: task.status } : item));
       setError(userError(reason, "Could not update task status."));
+    } finally {
+      setUpdatingTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(task._id);
+        return next;
+      });
     }
   }
 
@@ -283,8 +300,14 @@ export default function Home() {
 
       <section className="main-content">
         <header className="topbar">
-          <button className="icon-button settings-button" aria-label="Settings"><Settings2 size={19} /></button>
-          <a className="mobile-brand" href="#" aria-label="Todo home">todo<span className="brand-period">.</span></a>
+          <button className="icon-button settings-button" aria-label="Settings"><Settings size={19} /></button>
+          <div className="header-center">
+            <a className="mobile-brand" href="#" aria-label="Todo home">todo<span className="brand-period">.</span></a>
+            <div className="header-credit">
+              <span>Created by Krishnakant Pawar</span>
+              <a href="https://github.com/krishnakant20/TodoReactNative" target="_blank" rel="noreferrer" aria-label="View TodoReactNative on GitHub">GitHub</a>
+            </div>
+          </div>
           <div className="topbar-actions">
             <button className="icon-button header-search-button" aria-label="Search tasks" onClick={() => searchInputRef.current?.focus()}><Search size={19} /></button>
             <button className="icon-button notification-button" aria-label="Notifications"><Bell size={19} /><i /></button>
@@ -337,9 +360,8 @@ export default function Home() {
           </section>
 
           <section className="week-progress-card">
-            <div className="progress-card-heading"><span>Weekly Progress</span><strong>{progress}%</strong></div>
+            <div className="progress-card-heading"><span>Weekly Progress</span></div>
             <div className="progress-track"><div style={{ width: `${progress}%` }} /></div>
-            <p>{weekDone} of {weekTotal} tasks completed this week</p>
           </section>
 
           <section className="tasks-section">
@@ -353,7 +375,7 @@ export default function Home() {
 
             <div className="task-list">
               {loading ? <div className="state-message"><LoaderCircle className="spin" size={22} /> Loading tasks...</div>
-                : filteredTasks.length ? filteredTasks.map((task) => <TaskRow key={task._id} task={task} onToggle={() => void updateStatus(task)} onEdit={() => openEdit(task)} onDelete={() => void deleteTask(task)} />)
+                : filteredTasks.length ? filteredTasks.map((task) => <TaskRow key={task._id} task={task} busy={updatingTaskIds.has(task._id)} onToggle={() => void updateStatus(task)} onEdit={() => openEdit(task)} onDelete={() => void deleteTask(task)} />)
                   : <div className="empty-state">
                     <div className="empty-icon"><ListFilter size={22} /></div>
                     <strong>{query ? "No matching tasks" : "No tasks for this day"}</strong>
@@ -374,18 +396,19 @@ export default function Home() {
             <button className="icon-button" onClick={() => setModalOpen(false)} aria-label="Close"><X size={19} /></button>
           </header>
           <form onSubmit={saveTask}>
+            {formError && <div className="form-error" role="alert">{formError}</div>}
             <label className="form-field"><span>Task title <b>*</b></span><input autoFocus required maxLength={120} value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Add a task" /></label>
             <div className="time-field-group">
               <span className="field-caption">Set Time <b>*</b></span>
               <div className="form-row">
-                <label className="form-field"><span><Clock3 size={14} /> Start</span><input type="time" required value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} /></label>
-                <label className="form-field"><span><Clock3 size={14} /> Ends</span><input type="time" required value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} /></label>
+                <div className="form-field"><span><Clock3 size={14} /> Start</span><TimePicker value={draft.startTime} onChange={(startTime) => setDraft({ ...draft, startTime })} /></div>
+                <div className="form-field"><span><Clock3 size={14} /> Ends</span><TimePicker value={draft.endTime} onChange={(endTime) => setDraft({ ...draft, endTime })} /></div>
               </div>
             </div>
             <label className="form-field"><span>Set Date <b>*</b></span><input type="date" required value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} /></label>
             <label className="form-field"><span>Description <small>OPTIONAL</small></span><textarea rows={3} maxLength={1000} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Add Description" /></label>
             <div className="form-row">
-              <label className="form-field priority-select-field"><span>Priority</span><select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+              <div className="form-field priority-select-field"><span>Priority</span><PriorityPicker value={draft.priority} onChange={(priority) => setDraft({ ...draft, priority })} /></div>
             </div>
             <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setModalOpen(false)}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{editing ? "Save changes" : "Create task"}</button></div>
           </form>
@@ -395,15 +418,82 @@ export default function Home() {
   );
 }
 
-function TaskRow({ task, onToggle, onEdit, onDelete }: { task: Task; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
+function TaskRow({ task, busy, onToggle, onEdit, onDelete }: { task: Task; busy: boolean; onToggle: () => void; onEdit: () => void; onDelete: () => void }) {
   const completed = task.status === "completed";
-  return <article className={`task-row ${completed ? "task-completed" : ""}`}>
-    <button className={`task-check ${completed ? "checked" : ""}`} onClick={onToggle} aria-pressed={completed} aria-label={completed ? "Mark as in progress" : "Mark as completed"} />
+  return <article className={`task-row ${completed ? "task-completed" : ""} ${busy ? "task-row-saving" : ""}`} aria-busy={busy}>
+    <button className={`task-check ${completed ? "checked" : ""}`} onClick={onToggle} disabled={busy} aria-pressed={completed} aria-label={busy ? "Saving task status" : completed ? "Mark as in progress" : "Mark as completed"} />
     <div className="task-main">
       <div className="task-title-line"><h3>{task.title}</h3><span className={`priority-dot priority-${task.priority}`} title={`${task.priority} priority`} /></div>
       {task.description && <p className="task-description">{task.description}</p>}
       <div className="task-meta"><span><Clock3 size={13} />{displayTimeRange(task)}</span><span className={`priority-label priority-text-${task.priority}`}>{task.priority} priority</span></div>
     </div>
-    <div className="task-actions"><span className="task-status">{completed ? "Done" : "In progress"}</span><button onClick={onDelete} aria-label={`Delete ${task.title}`}><Trash2 size={15} /></button><button onClick={onEdit} aria-label={`Edit ${task.title}`}><Pencil size={15} /></button></div>
+    <div className="task-actions"><span className="task-status">{completed ? "Done" : "In progress"}</span><button onClick={onDelete} disabled={busy} aria-label={`Delete ${task.title}`}><Trash2 size={15} /></button><button onClick={onEdit} disabled={busy} aria-label={`Edit ${task.title}`}><SquarePen size={15} /></button></div>
+    {busy && <div className="task-saving-overlay" role="status" aria-label="Saving task status"><LoaderCircle className="spin" size={18} aria-hidden="true" /></div>}
   </article>;
+}
+
+function TimePicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const minuteColumnRef = useRef<HTMLDivElement>(null);
+  const selectedMinuteRef = useRef<HTMLButtonElement>(null);
+  const [rawHour, rawMinute] = value.split(":").map(Number);
+  const hour = rawHour % 12 || 12;
+  const period = rawHour >= 12 ? "PM" : "AM";
+  const display = `${hour}:${String(rawMinute).padStart(2, "0")} ${period}`;
+
+  function updateTime(nextHour = hour, nextMinute = rawMinute, nextPeriod = period) {
+    const hour24 = nextHour % 12 + (nextPeriod === "PM" ? 12 : 0);
+    onChange(`${String(hour24).padStart(2, "0")}:${String(nextMinute).padStart(2, "0")}`);
+  }
+
+  useEffect(() => {
+    if (!open || !minuteColumnRef.current || !selectedMinuteRef.current) return;
+    const column = minuteColumnRef.current;
+    const option = selectedMinuteRef.current;
+    column.scrollTop += option.offsetTop - column.offsetTop - (column.clientHeight - option.clientHeight) / 2;
+  }, [open]);
+
+  return (
+    <div className="time-picker" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}>
+      <button type="button" className="time-picker-trigger" aria-label={`Time ${display}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <span>{display}</span><Clock3 size={15} />
+      </button>
+      {open && <div className="time-picker-popover">
+        <div className="time-picker-columns">
+          <div className="time-picker-column" role="listbox" aria-label="Hour">
+            <span className="time-column-label">Hour</span>
+            {Array.from({ length: 12 }, (_, index) => index + 1).map((option) => <button key={option} type="button" role="option" aria-selected={hour === option} className={hour === option ? "time-option time-option-active" : "time-option"} onClick={() => updateTime(option)}>{String(option).padStart(2, "0")}</button>)}
+          </div>
+          <div ref={minuteColumnRef} className="time-picker-column minute-column" role="listbox" aria-label="Minute">
+            <span className="time-column-label">Minute</span>
+            {Array.from({ length: 60 }, (_, minute) => minute).map((option) => <button key={option} ref={rawMinute === option ? selectedMinuteRef : undefined} type="button" role="option" aria-selected={rawMinute === option} className={rawMinute === option ? "time-option time-option-active" : "time-option"} onClick={() => updateTime(hour, option)}>{String(option).padStart(2, "0")}</button>)}
+          </div>
+          <div className="time-picker-column period-column" role="listbox" aria-label="AM or PM">
+            <span className="time-column-label">Period</span>
+            {(["AM", "PM"] as const).map((option) => <button key={option} type="button" role="option" aria-selected={period === option} className={period === option ? "time-option time-option-active" : "time-option"} onClick={() => updateTime(hour, rawMinute, option)}>{option}</button>)}
+          </div>
+        </div>
+        <button type="button" className="time-picker-done" onClick={() => setOpen(false)}>Done</button>
+      </div>}
+    </div>
+  );
+}
+
+function PriorityPicker({ value, onChange }: { value: Priority; onChange: (value: Priority) => void }) {
+  const [open, setOpen] = useState(false);
+  const priorities: Priority[] = ["low", "medium", "high"];
+
+  return (
+    <div className="priority-picker" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}>
+      <button type="button" className="priority-picker-trigger" aria-label={`Priority: ${value}`} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
+        <span><i className={`priority-dot priority-${value}`} />{value[0].toUpperCase() + value.slice(1)}</span>
+        <ChevronDown size={16} className={open ? "dropdown-chevron dropdown-chevron-open" : "dropdown-chevron"} />
+      </button>
+      {open && <div className="priority-picker-menu" role="listbox" aria-label="Priority">
+        {priorities.map((priority) => <button key={priority} type="button" role="option" aria-selected={value === priority} className={value === priority ? "priority-picker-option priority-picker-option-active" : "priority-picker-option"} onClick={() => { onChange(priority); setOpen(false); }}>
+          <i className={`priority-dot priority-${priority}`} />{priority[0].toUpperCase() + priority.slice(1)}{value === priority && <Check size={15} />}
+        </button>)}
+      </div>}
+    </div>
+  );
 }
